@@ -32,25 +32,35 @@ from scipy.io.wavfile import write
 import torch
 from mel2samp import files_to_list, MAX_WAV_VALUE
 from denoiser import Denoiser
+from device import get_default_device
 
 
-def main(mel_files, squeezewave_path, sigma, output_dir, sampling_rate, is_fp16,
-         denoiser_strength):
+def main(
+        mel_files, 
+        squeezewave_path, 
+        sigma, 
+        output_dir, 
+        sampling_rate, 
+        is_fp16,
+        denoiser_strength,
+        device
+):
     mel_files = files_to_list(mel_files)
-    squeezewave = torch.load(squeezewave_path)['model']
+    squeezewave = torch.load(squeezewave_path, map_location=device)['model']
+    squeezewave.device = device  # hack for loading model trained on gpu to cpu
     squeezewave = squeezewave.remove_weightnorm(squeezewave)
-    squeezewave.cuda().eval()
+    squeezewave.to(device=device).eval()
     if is_fp16:
         from apex import amp
         squeezewave, _ = amp.initialize(squeezewave, [], opt_level="O3")
 
     if denoiser_strength > 0:
-        denoiser = Denoiser(squeezewave).cuda()
+        denoiser = Denoiser(squeezewave).to(device=device)
 
     for i, file_path in enumerate(mel_files):
         file_name = os.path.splitext(os.path.basename(file_path))[0]
         mel = torch.load(file_path)
-        mel = torch.autograd.Variable(mel.cuda())
+        mel = torch.autograd.Variable(mel.to(device=device))
         mel = torch.unsqueeze(mel, 0)
         mel = mel.half() if is_fp16 else mel
         with torch.no_grad():
@@ -80,8 +90,9 @@ if __name__ == "__main__":
     parser.add_argument("--is_fp16", action="store_true")
     parser.add_argument("-d", "--denoiser_strength", default=0.0, type=float,
                         help='Removes model bias. Start with 0.1 and adjust')
+    parser.add_argument("-D", "--device", default=get_default_device())
 
     args = parser.parse_args()
 
     main(args.filelist_path, args.squeezewave_path, args.sigma, args.output_dir,
-         args.sampling_rate, args.is_fp16, args.denoiser_strength)
+         args.sampling_rate, args.is_fp16, args.denoiser_strength, args.device)

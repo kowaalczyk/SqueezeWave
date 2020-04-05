@@ -31,6 +31,7 @@ import torch
 from torch.autograd import Variable
 import torch.nn.functional as F
 import numpy as np
+from device import get_default_device
 
 
 @torch.jit.script
@@ -121,11 +122,21 @@ class WN(torch.nn.Module):
     from WaveNet is the convolutions need not be causal.  There is also no dilation
     size reset.  The dilation only doubles on each layer
     """
-    def __init__(self, n_in_channels, n_mel_channels, n_layers, n_channels,
-                 kernel_size):
+    def __init__(
+            self, 
+            n_in_channels, 
+            n_mel_channels, 
+            n_layers, 
+            n_channels,
+            kernel_size,
+            device=get_default_device()
+    ):
         super(WN, self).__init__()
+        self.device = device
+
         assert(kernel_size % 2 == 1)
         assert(n_channels % 2 == 0)
+
         self.n_layers = n_layers
         self.n_channels = n_channels
         self.in_layers = torch.nn.ModuleList()
@@ -138,6 +149,7 @@ class WN(torch.nn.Module):
         end.weight.data.zero_()
         end.bias.data.zero_()
         self.end = end
+
         
         # cond_layer
         cond_layer = torch.nn.Conv1d(n_mel_channels, 2*n_channels*n_layers, 1)
@@ -146,10 +158,14 @@ class WN(torch.nn.Module):
             dilation = 1
             padding = int((kernel_size*dilation - dilation)/2)
             # depthwise separable convolution
-            depthwise = torch.nn.Conv1d(n_channels, n_channels, 3,
+            depthwise = torch.nn.Conv1d(
+                n_channels, n_channels, 3,
                 dilation=dilation, padding=padding,
-                groups=n_channels).cuda()
-            pointwise = torch.nn.Conv1d(n_channels, 2*n_channels, 1).cuda()
+                groups=n_channels
+            ).to(device=self.device)
+            pointwise = torch.nn.Conv1d(
+                n_channels, 2*n_channels, 1
+            ).to(device=self.device)
             bn = torch.nn.BatchNorm1d(n_channels) 
             self.in_layers.append(torch.nn.Sequential(bn, depthwise, pointwise))
             # res_skip_layer
@@ -250,9 +266,14 @@ class SqueezeWave(torch.nn.Module):
                                           self.n_remaining_channels,
                                           l).normal_()
         else:
-            audio = torch.cuda.FloatTensor(spect.size(0),
-                                           self.n_remaining_channels,
-                                           l).normal_()
+            audio = torch.Tensor(
+                spect.size(0),
+                self.n_remaining_channels,
+                l
+            ).normal_().to(device=self.device)
+            # audio = torch.cuda.FloatTensor(spect.size(0),
+            #                                self.n_remaining_channels,
+            #                                l).normal_()
 
         for k in reversed(range(self.n_flows)):
             n_half = int(audio.size(1)/2)
@@ -269,9 +290,13 @@ class SqueezeWave(torch.nn.Module):
 
             if k % self.n_early_every == 0 and k > 0:
                 if spect.type() == 'torch.cuda.HalfTensor':
-                    z = torch.cuda.HalfTensor(spect.size(0), self.n_early_size, l).normal_()
+                    z = torch.cuda.HalfTensor(
+                        spect.size(0), self.n_early_size, l
+                    ).normal_()
                 else:
-                    z = torch.cuda.FloatTensor(spect.size(0), self.n_early_size, l).normal_()
+                    z = torch.Tensor(
+                        spect.size(0), self.n_early_size, l
+                    ).normal_().to(device=self.device)
                 audio = torch.cat((sigma*z, audio),1)
 
         audio = audio.permute(0,2,1).contiguous().view(audio.size(0), -1).data
