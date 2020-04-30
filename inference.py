@@ -60,6 +60,10 @@ def main(
     for i, file_path in enumerate(mel_files):
         file_name = os.path.splitext(os.path.basename(file_path))[0]
         mel = torch.load(file_path)
+        if len(mel.shape) > 2:
+            mel = mel.squeeze()
+            print(f"squeezed to {mel.shape}")
+        assert len(mel.shape) == 2
         mel = torch.autograd.Variable(mel.to(device=device))
         mel = torch.unsqueeze(mel, 0)
         mel = mel.half() if is_fp16 else mel
